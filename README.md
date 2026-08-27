@@ -1,10 +1,10 @@
 # chatwoot-railway
 
 Railway-tuned [Chatwoot](https://github.com/chatwoot/chatwoot) image: baked env defaults,
-`$PORT` + IPv6 bind, first-boot database prepare, and one image that runs both the Rails web
-service and the Sidekiq worker.
+`$PORT` + IPv6 bind, first-boot database prepare, an administrator seeded before the port
+opens, and Rails + Sidekiq in one container so they share one volume.
 
-Image: `ghcr.io/bon5co/chatwoot-railway:latest` — wraps `chatwoot/chatwoot:v4.16.2-ce`.
+Image: `ghcr.io/bon5co/chatwoot-railway:v4.17.1` — wraps `chatwoot/chatwoot:v4.17.1-ce`.
 
 ## Why a wrapper image exists
 
@@ -19,13 +19,30 @@ with a generated default.
 ## What the entrypoint does
 
 - Waits for Postgres (`pg_isready`) before touching Rails.
-- **Web role** (no arguments): runs `rails db:chatwoot_prepare` — idempotent, creates and
-  seeds on the first deploy, migrates on later ones — then serves on Railway's injected
-  `$PORT`, bound to `::`. Railway's private network is IPv6-only, so a `0.0.0.0`-only bind is
-  unreachable from sibling services.
-- **Worker role** (Railway start command `bundle exec sidekiq -C config/sidekiq.yml`): waits
-  for the web service to create the schema (`select to_regclass('public.accounts')`) before
-  starting, so it does not crash-loop through the first deploy.
+- Runs `rails db:chatwoot_prepare` — idempotent, creates and loads the schema on the first
+  deploy, migrates on later ones.
+- Seeds the administrator (`seed_admin.rb`) **before anything binds the port**, and refuses to
+  boot if `CHATWOOT_ADMIN_EMAIL` or `CHATWOOT_ADMIN_PASSWORD` is empty. A stock Chatwoot
+  production deploy creates no user at all: `db/seeds.rb` seeds an account only outside
+  production, `ENABLE_ACCOUNT_SIGNUP` ships as `false`, and
+  `Api::V1::AccountsController#check_signup_enabled` then answers the signup route with `404`.
+  There is no other HTTP path to a first account, so an unseeded instance cannot be logged
+  into by anyone, ever.
+- Re-applies the administrator's password on every boot, which makes a redeploy the only
+  working password reset a fresh instance has (Chatwoot's own reset is an emailed link, and a
+  fresh deploy has no SMTP).
+- Starts Sidekiq in the same container and serves Rails on Railway's injected `$PORT`, bound
+  to `::` (Railway's private network is IPv6-only, so a `0.0.0.0`-only bind is unreachable
+  from sibling services). If Sidekiq exits, the container is stopped rather than left
+  reporting a healthy deploy with no background jobs.
+
+## Why one container, not a web service plus a worker service
+
+Chatwoot's `ACTIVE_STORAGE_SERVICE=local` keeps every uploaded attachment, avatar and
+generated CSV export under `/app/storage`. Railway volumes cannot be shared between services —
+two services mounting the same path each get their own volume — so a split deployment writes
+Sidekiq's output to the worker's disk and then serves the download from the web service, which
+does not have the file.
 
 ## Baked defaults
 

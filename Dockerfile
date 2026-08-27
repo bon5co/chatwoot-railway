@@ -1,4 +1,4 @@
-FROM chatwoot/chatwoot:v4.16.2-ce
+FROM chatwoot/chatwoot:v4.17.1-ce
 
 # Railway wrapper around the official Chatwoot community image.
 #
@@ -27,6 +27,7 @@ ENV INSTALLATION_ENV=docker \
     FORCE_SSL=false
 
 COPY railway-entrypoint.sh /usr/local/bin/railway-entrypoint.sh
+COPY seed_admin.rb /usr/local/share/chatwoot/seed_admin.rb
 RUN chmod +x /usr/local/bin/railway-entrypoint.sh
 
 EXPOSE 3000

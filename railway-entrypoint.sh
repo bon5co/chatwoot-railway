@@ -1,15 +1,13 @@
 #!/bin/sh
 # Railway entrypoint for Chatwoot.
 #
-# Two roles run from this one image:
-#   no arguments  -> the web (Rails) service: prepares the database, then serves
-#                    on Railway's injected $PORT bound to :: (Railway's private
-#                    network is IPv6; binding 0.0.0.0 only would be unreachable
-#                    from sibling services).
-#   with arguments -> whatever Railway's start command passes, i.e. the Sidekiq
-#                    worker. It waits for the web service to finish migrations
-#                    first, otherwise it crash-loops on a table that does not
-#                    exist yet.
+# Rails and Sidekiq run in ONE container here, deliberately. Chatwoot's
+# ActiveStorage `local` service keeps every uploaded attachment, avatar and
+# generated CSV export under /app/storage, and Railway volumes cannot be shared
+# between services: two services mounting the same path each get their OWN
+# volume. Split across a web service and a worker service, a report exported by
+# Sidekiq is written to the worker's disk and then requested from the web
+# service, which does not have it. One service, one volume, no split.
 set -e
 
 : "${POSTGRES_HOST:?POSTGRES_HOST is required}"
@@ -33,27 +31,30 @@ echo "[railway] postgres is ready"
 mkdir -p /app/storage /app/tmp/pids
 rm -f /app/tmp/pids/server.pid
 
-if [ "$#" -gt 0 ]; then
-    echo "[railway] waiting for the web service to finish migrations"
-    tries=0
-    until PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" \
-        -U "$POSTGRES_USERNAME" -d "$POSTGRES_DATABASE" \
-        -tAc "select to_regclass('public.accounts')" 2>/dev/null | grep -q accounts; do
-        tries=$((tries + 1))
-        if [ "$tries" -gt 150 ]; then
-            echo "[railway] schema still missing after 10 minutes, starting anyway" >&2
-            break
-        fi
-        sleep 4
-    done
-    echo "[railway] starting: $*"
-    exec "$@"
-fi
-
 # Idempotent: creates the database and loads the schema on a first deploy, runs
 # pending migrations on every deploy after that.
 echo "[railway] preparing database"
 bundle exec rails db:chatwoot_prepare
+
+# Before anything binds the port. A stock production deploy has no user, and
+# ENABLE_ACCOUNT_SIGNUP is false, so the signup route answers 404 — see
+# seed_admin.rb. Re-applying the password on every boot also makes a redeploy
+# the instance's only working password reset (Chatwoot's own reset is an
+# emailed link, and a fresh deploy has no SMTP).
+echo "[railway] seeding administrator"
+bundle exec rails runner /usr/local/share/chatwoot/seed_admin.rb
+
+echo "[railway] starting sidekiq"
+bundle exec sidekiq -C config/sidekiq.yml &
+sidekiq_pid=$!
+
+# If the worker dies the container must die with it, otherwise Railway keeps
+# reporting a healthy deploy while no background job ever runs again.
+(
+    wait "$sidekiq_pid"
+    echo "[railway] sidekiq exited, stopping the container" >&2
+    kill -TERM 1 2>/dev/null || true
+) &
 
 echo "[railway] starting rails on :${PORT}"
 exec bundle exec rails s -p "$PORT" -b '::'
