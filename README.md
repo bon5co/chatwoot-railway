@@ -1,5 +1,9 @@
 # chatwoot-railway
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/chatwoot-or-just-updated-intercom-altern?referralCode=Z1xivh&utm_medium=integration&utm_source=template&utm_campaign=generic)
+
+**Deploy on Railway:** [Chatwoot template](https://railway.com/deploy/chatwoot-or-just-updated-intercom-altern?referralCode=Z1xivh&utm_medium=integration&utm_source=template&utm_campaign=generic)
+
 Railway-tuned [Chatwoot](https://github.com/chatwoot/chatwoot) image: baked env defaults,
 `$PORT` + IPv6 bind, first-boot database prepare, an administrator seeded before the port
 opens, and Rails + Sidekiq in one container so they share one volume.
